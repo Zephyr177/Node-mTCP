@@ -26,7 +26,7 @@ class MSocket extends stream_1.Duplex {
     remotePort;
     keepAlive = false;
     keepAliveDelay = 0;
-    noDelay = false;
+    noDelay = true; // 默认禁用Nagle算法以降低延迟
     constructor(opts) {
         super({
             //highWaterMark: 1,
@@ -121,6 +121,13 @@ class MSocket extends stream_1.Duplex {
             if (debug_tcp_error_log)
                 if (this.readyState === "open" || this.readyState === "opening")
                     console.error(`mtcp conn(cid:${conn.cid},mid:${this.cid}:${port}) ${host}:${port} link error:${err.message} w:${conn.bytesWritten} r:${conn.bytesRead}`);
+            // 从待定连接池中移除并销毁，防止资源泄露
+            const index = this.pendingConns.indexOf(conn);
+            if (index > -1) {
+                this.pendingConns.splice(index, 1);
+            }
+            conn.destroy();
+            this.checkAlive(); // 检查是否所有连接都已断开
         });
         conn.once("data", (buffer) => {
             if (!conn.cid) //未登录
@@ -231,11 +238,11 @@ class MSocket extends stream_1.Duplex {
     }
     _write(buffer, encoding, callback) {
         if (this.conns.length === 0) {
-            this.emit("error", new Error("conns 0"));
+            callback(new Error("conns 0")); // 使用回调传递错误，而不是emit，防止程序崩溃
             return;
         }
         if (this.readyState !== "open") {
-            this.emit("error", new Error("not open"));
+            callback(new Error("not open")); // 使用回调传递错误
             return;
         }
         //创建一个打包后的buffer数据
@@ -304,6 +311,7 @@ function createMTcpServer(connectionListener) {
         conn.on("error", (err) => {
             if (debug_tcp_error_log)
                 console.log(`error:mid:${conn.mid} cid:${conn.cid} ${err.message}`);
+            conn.destroy(); // 发生错误时销毁连接
         });
         let buffer = Buffer.alloc(2);
         buffer.writeUint16BE(conn.cid);
